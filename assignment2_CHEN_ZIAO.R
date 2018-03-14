@@ -99,8 +99,10 @@ mosaicplot(table(churnData$PaymentMethod, churnData$Churn), ylab="Churn", xlab="
 library(tree)
 
 # 3.1 Split data into training and testing set
+# 74% of data is used as training data
+# Because any number greater than 74% would cause 'maximum depth reached' issue in constructing the tree
 set.seed(4073)
-trainIndex <- sample(nrow(churnData), 0.7*nrow(churnData), replace = FALSE)
+trainIndex <- sample(nrow(churnData), 0.74*nrow(churnData), replace = FALSE)
 train <- churnData[trainIndex,]
 test <- churnData[-trainIndex,]
 
@@ -118,50 +120,90 @@ text(ltree, pretty = FALSE)
 summary(ltree) # Misclassification error rate 0.0008589
 
 # 3.3 Cross Validation
+# 3.3.1 CV on misclassification
 cvTree <- cv.tree(ltree, FUN = prune.misclass, K = 20)
 cbind(cvTree$size, cvTree$dev) 
 plot(cvTree$size, cvTree$dev, type="b",xlab = "Number of Leaves", ylab = "Deviance") 
 min(cvTree$dev)
 bestIndex1 <- cvTree$size[which(cvTree$dev == min(cvTree$dev))]
+bestIndex1
 
+# 3.3.2 CV on deviance
 cvTree <- cv.tree(ltree, FUN = prune.tree, K = 20)
 cbind(cvTree$size, cvTree$dev) 
 plot(cvTree$size, cvTree$dev, type="b",xlab = "Number of Leaves", ylab = "Deviance") 
 min(cvTree$dev)
 bestIndex2 <- cvTree$size[which(cvTree$dev == min(cvTree$dev))]
+bestIndex2
 
-# 3.4 Use best size to prune the tree
-bestSizeList <- intersect(bestIndex1, bestIndex2)
+# 3.4 Tree Pruning
+# Since there are multiple values for the lowest misclassification rate and deviance
+# best size is selected using the test set among all the candidates
+
+# 3.4.1 Find Best Size (misclassification)
 bestSize <- 1
 bestAccuracy <- 0
-for (size in bestSizeList){
+for (size in bestIndex1){
   pTree <- prune.misclass(ltree, best = size)
   predTest <- predict(pTree, test, type='class')
-  accuracy <- mean(predTest == train$Churn)
+  accuracy <- mean(predTest == test$Churn)
   if (accuracy > bestAccuracy){
     bestAccuracy <- accuracy
     bestSize <- size
   }
 }
-pTree <- prune.misclass(ltree, best = bestSize)
-plot(pTree)
-text(pTree, pretty = FALSE)
+bestSize # 9
+
+# 3.4.2 Use best size to prune the tree (deviance)
+pTree1 <- prune.misclass(ltree, best = bestSize)
+plot(pTree1)
+text(pTree1, pretty = FALSE)
+
+# 3.4.3 Find Best Size (misclassification)
+bestSize <- 1
+bestAccuracy <- 0
+for (size in bestIndex2){
+  pTree <- prune.tree(ltree, best = size)
+  predTest <- predict(pTree, test, type='class')
+  accuracy <- mean(predTest == test$Churn)
+  if (accuracy > bestAccuracy){
+    bestAccuracy <- accuracy
+    bestSize <- size
+  }
+}
+bestSize # 13
+
+# 3.4.4 Use best size to prune the tree (misclassification)
+pTree2 <- prune.tree(ltree, best = bestSize)
+plot(pTree2)
+text(pTree2, pretty = FALSE)
 
 # 3.5 Check accuracy of pruned tree
-predTrain <- predict(pTree, train, type="class")
-predTest <- predict(pTree, test, type='class')
-mean(predTrain == train$Churn)
-mean(predTest == train$Churn)
+# 3.5.1 Pruned tree using misclassification rate
+predTrain1 <- predict(pTree1, train, type="class")
+predTest1 <- predict(pTree1, test, type='class')
+mean(predTrain1 == train$Churn) # 0.8126185
+mean(predTest1 == test$Churn)  # 0.7927581
 
-# 3.6 Random Forest Method
+# 3.5.2 Pruned tree using deviance
+predTrain2 <- predict(pTree2, train, type="class")
+predTest2 <- predict(pTree2, test, type='class')
+mean(predTrain2 == train$Churn) # 0.8017872
+mean(predTest2 == test$Churn)  # 0.7958398
+
+# 3.6 Conclusion: pTree2 is chosen to be the optimal tree model instead of pTree1
+# because pTree1 has higher testing accuracy than pTree2
+
+# 3.7 Build Random Forest Classifier
+library(randomForest)
 set.seed(4073)
-rf <- randomForest(Churn ~ ., data = train, ntree = 500, importance = TRUE)                 
-rf
+rf <- randomForest(Churn ~ ., data = train, ntree = 1000, importance = TRUE)                 
+rf # error rate 19.66%
 
 predTrain <- predict(rf, train, type = "class")
-mean(predTrain == train$Churn)
-predValid <- predict(rf, test, type = "class")
-mean(predValid == test$Churn)
+mean(predTrain == train$Churn) # 0.9856485
+predTest <- predict(rf, test, type = "class")
+mean(predTest == test$Churn)  # 0.7912173
 
 importance(rf)
 varImpPlot(rf)
@@ -185,7 +227,7 @@ names(TitanicData)
 
 # 2.3 Structure of dataset
 str(TitanicData)
-TitanicData$Survived <- factor(TitanicData$Survived)
+TitanicData$Survived <- factor(TitanicData$Survived) #Covert target variable into factor
 
 # 2.4 First few rows
 head(TitanicData)
@@ -256,14 +298,14 @@ extractNames <- function(old_name){
 }
 TitanicData$Salutation <- factor(sapply(TitanicData$Name, FUN = extractNames))
 
-# 3.2.2 Preprocess Ticket
+# 3.2.2 Extract digits from Ticket
 extractDigits <- function(old_no){
   return (gsub("[^0-9]", "", old_no))
 }
 
 TitanicData$TicketNew <- as.numeric(sapply(TitanicData$Ticket, FUN= extractDigits))
 
-# 3.2.3 Preprocess Cabin
+# 3.2.3 Extract letter from Cabin
 processCabin <- function(cabin){
   if (cabin==""){
     return('Z')
@@ -290,7 +332,8 @@ TitanicDataDrop$Age <- as.numeric(sapply(TitanicDataDrop$Age, FUN= removeNA, m =
 TitanicDataDrop$TicketNew <- as.numeric(sapply(TitanicDataDrop$TicketNew, FUN= removeNA, m = median(TitanicDataDrop$TicketNew, na.rm = TRUE)))
 
 # 3.3 Split Training and Testing Set
-trainIndex <- sample(nrow(TitanicDataDrop), 0.9*nrow(TitanicDataDrop), replace = FALSE)
+set.seed(4073)
+trainIndex <- sample(nrow(TitanicDataDrop), 0.8*nrow(TitanicDataDrop), replace = FALSE)
 train <- TitanicDataDrop[trainIndex,]
 test <- TitanicDataDrop[-trainIndex,]
 
@@ -308,6 +351,7 @@ text(ltree, pretty = FALSE)
 summary(ltree)
 
 # 3.5 Cross Validation
+# 3.5.1 CV on misclassification rate
 set.seed(4073)
 cvTree <- cv.tree(ltree, FUN = prune.misclass, K = 20)
 cbind(cvTree$size, cvTree$dev) 
@@ -316,6 +360,7 @@ min(cvTree$dev)
 bestIndex1 <- cvTree$size[which(cvTree$dev == min(cvTree$dev))]
 bestIndex1
 
+# 3.5.2 CV on deviance
 set.seed(4073)
 cvTree <- cv.tree(ltree, FUN = prune.tree, K = 20)
 cbind(cvTree$size, cvTree$dev) 
@@ -325,53 +370,92 @@ bestIndex2 <- cvTree$size[which(cvTree$dev == min(cvTree$dev))]
 bestIndex2
 
 # 3.6 Find best size
-bestSizeList <- union(bestIndex1, bestIndex2)
-bestSize <- 1
+# 3.6.1 Find best size using misclassfication rate
+bestSize1 <- 1
 bestAccuracy <- 0
-for (size in bestSizeList){
+for (size in bestIndex1){
   pTree <- prune.misclass(ltree, best = size)
   predTest <- predict(pTree, test, type='class')
   accuracy <- mean(predTest == test$Survived)
-  if (accuracy > bestAccuracy && size<50){
+  if (accuracy > bestAccuracy){
     bestAccuracy <- accuracy
-    bestSize <- size
+    bestSize1 <- size
   }
 }
+bestSize1 # 56
+
+# 3.6.2 Find best size using deviance
+bestSize2 <- 1
+bestAccuracy <- 0
+for (size in bestIndex2){
+  pTree <- prune.tree(ltree, best = size)
+  predTest <- predict(pTree, test, type='class')
+  accuracy <- mean(predTest == test$Survived)
+  if (accuracy > bestAccuracy){
+    bestAccuracy <- accuracy
+    bestSize2 <- size
+  }
+}
+bestSize2 # 8
 
 # 3.7 Use best size to prune the tree
-pTree <- prune.misclass(ltree, best = bestSize)
-plot(pTree)
-text(pTree, pretty = FALSE)
+# 3.7.1 Prune tree using misclassification rate
+pTree1 <- prune.misclass(ltree, best = bestSize1)
+plot(pTree1)
+text(pTree1, pretty = FALSE)
+
+# 3.7.2 Prune tree using deviance
+pTree2 <- prune.tree(ltree, best = bestSize2)
+plot(pTree2)
+text(pTree2, pretty = FALSE)
 
 # 3.8 Check accuracy of pruned tree
-predTrain <- predict(pTree, train, type="class")
-predTest <- predict(pTree, test, type='class')
-mean(predTrain == train$Survived)
-mean(predTest == test$Survived)
+# 3.8.1 Misclassification Rate
+predTrain1 <- predict(pTree1, train, type="class")
+predTest1 <- predict(pTree1, test, type='class')
+mean(predTrain1 == train$Survived) # 0.9382022
+mean(predTest1 == test$Survived) # 0.8268156
 
-# 4 Output Submission File
-# Public Leaderboard Score: 0.7790
+# 3.8.2 Deviance
+predTrain2 <- predict(pTree2, train, type="class")
+predTest2 <- predict(pTree2, test, type='class')
+mean(predTrain2 == train$Survived) # 0.8300562
+mean(predTest2 == test$Survived) # 0.8268156
+
+# 4 Submit file on Kaggle
+# 4.1 Preprocess test data
 testData <- read.csv('test.csv')
 testData$Salutation <- factor(sapply(testData$Name, FUN = extractNames))
 testData$TicketNew <- as.numeric(sapply(testData$Ticket, FUN= extractDigits))
 testData$cabinLetter <- factor(sapply(testData$Cabin, FUN= processCabin))
 testDataDrop <- testData[ , !(names(testData) %in% drops)]
-predTest <- predict(pTree, testDataDrop, type='class')
-write.csv(data.frame(PassengerId=testData$PassengerId, Survived=predTest), file = 'submission.csv', row.names = FALSE)
+
+# 4.2 Prediction using pTree1
+# Kaggle Score 0.75119
+predTest1 <- predict(pTree1, testDataDrop, type='class')
+write.csv(data.frame(PassengerId=testData$PassengerId, Survived=predTest1), file = 'submission1.csv', row.names = FALSE)
+
+# Prediction using pTree2
+# Kaggle Score 0.79904, rank 1131
+predTest2 <- predict(pTree2, testDataDrop, type='class')
+write.csv(data.frame(PassengerId=testData$PassengerId, Survived=predTest2), file = 'submission2.csv', row.names = FALSE)
+# In conclusion, the optimal tree model is pTree2 because it has the highest score on kaggle
+# and although both pTree2 and pTree1 have same testing accuracy,
+# pTree2 has lower training accuracy, which means pTree2 has lower chance of overfitting
 
 # 5 Random Forest
 set.seed(4073)
 library(randomForest)
 
 # 5.1 Build Random Forest classifier
-rf <- randomForest(Survived ~ ., data = train, ntree = 400, importance = TRUE)                 
+rf <- randomForest(Survived ~ ., data = train, ntree = 1000, importance = TRUE)                 
 rf
 
 # 5.2 Check model accuracy
 predTrain <- predict(rf, train, type = "class")
-mean(predTrain == train$Survived)
+mean(predTrain == train$Survived) # 0.9662921
 predValid <- predict(rf, test, type = "class")
-mean(predValid == test$Survived)
+mean(predValid == test$Survived) # 0.8547486
 
 # 5.3 View variable importance
 importance(rf)
@@ -382,6 +466,10 @@ temp <- rbind(train[,-1], testDataDrop)
 testDataDrop <- temp[seq(nrow(train)+1,nrow(temp)),]
 testDataDrop$Age <- as.numeric(sapply(testDataDrop$Age, FUN= removeNA, m = median(TitanicDataDrop$Age, na.rm = TRUE)))
 testDataDrop$Fare <- as.numeric(sapply(testDataDrop$Fare, FUN= removeNA, m = median(TitanicDataDrop$Fare, na.rm = TRUE)))
+
+# Kaggle Score 0.77511
 predTest <- predict(rf, testDataDrop, type='class')
 write.csv(data.frame(PassengerId=testData$PassengerId, Survived=predTest), file = 'submission.csv', row.names = FALSE)
 
+# Although random forest has higher training and testing accuracy compared to normal tree model,
+# the kaggle socre is lower than the optimal tree model (0.79904)
